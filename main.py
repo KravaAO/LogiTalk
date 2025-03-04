@@ -1,5 +1,6 @@
 from customtkinter import *
 from PIL import Image
+from socket import *
 
 
 class MessageBubble(CTkFrame):
@@ -173,6 +174,14 @@ class MainWindow(CTk):
             image_ctk = CTkImage(light_image=Image.open(self.avatar_path), size=(60, 60))
             self.avatar_label.configure(image=image_ctk, text='')
 
+
+try:
+    sock = socket(AF_INET, SOCK_STREAM)
+    sock.connect(('localhost', 52345))
+    sock.setblocking(False)
+    sock.send('hello'.encode())
+except:
+    print('Немає запущеного сервера')
 
 window = MainWindow()
 window.mainloop()
