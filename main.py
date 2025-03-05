@@ -1,7 +1,8 @@
 from customtkinter import *
 from PIL import Image
 from socket import *
-
+import io
+from random import *
 
 class MessageBubble(CTkFrame):
     def __init__(self, master, avatar_path, text, is_sender=False):
@@ -39,8 +40,65 @@ def change_appearance_mode(value):
         set_appearance_mode('dark')
 
 
-class MainWindow(CTk):
+class RegisterWindow(CTk):
     def __init__(self):
+        super().__init__()
+
+        self.image_path = 'profile.png'
+
+        self.geometry('300x300')
+        self.title('Реєстрація')
+
+        self.image_ctk = CTkImage(light_image=Image.open(self.image_path), size=(100, 100))
+        self.image_label = CTkLabel(self, text='')
+        self.image_label.pack(pady=20)
+
+        self.load_image_button = CTkButton(self, text='Обрати зображення', command=self.load_image)
+        self.load_image_button.pack()
+
+        self.name_entry = CTkEntry(self, placeholder_text="Введіть ім'я:")
+        self.name_entry.pack(pady=15)
+
+        self.reg_button = CTkButton(self, text='Зареєструватися', command=self.open_main_window)
+        self.reg_button.pack()
+
+    def open_main_window(self):
+        name = self.name_entry.get()
+        try:
+            sock = socket(AF_INET, SOCK_STREAM)
+            sock.connect(('localhost', 52345))
+            sock.setblocking(False)
+            sock.send(name.encode())
+
+            image = Image.open(self.image_path)
+
+            # Конвертація зображення в байти
+            image_bytes = io.BytesIO()
+            image.save(image_bytes, format='PNG')
+
+            # Відправлення даних через сокет
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.connect(('localhost', 52345))
+            client_socket.sendall(image_bytes.getvalue())
+
+            print("Зображення відправлено!")
+        except:
+            print('Немає запущеного сервера')
+
+        self.destroy()
+        window = MainWindow(self.image_path, name, sock)
+        window.mainloop()
+
+    def load_image(self):
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            self.image_path = file_path
+            self.image_ctk = CTkImage(light_image=Image.open(self.image_path), size=(100, 100))
+            self.image_label.configure(image=self.image_ctk)
+
+
+class MainWindow(CTk):
+    def __init__(self, avatar_path, name, sock):
         super().__init__()
 
         self.load_avatar_button = None
@@ -50,7 +108,9 @@ class MainWindow(CTk):
         self.save_name_button = None
         self.entry_name = None
         self.name_label = None
-        self.avatar_path = 'profile.png'
+        self.avatar_path = avatar_path
+        self.name = name
+        self.sock = sock
         self.avatar_image = CTkImage(light_image=Image.open(self.avatar_path), size=(60, 60))
 
         self.geometry('500x400')
@@ -83,6 +143,8 @@ class MainWindow(CTk):
         self.send_button = CTkButton(self, text='>', width=30, height=40, command=self.send_message)
         self.send_button.place(x=0, y=350)
         self.is_animate = False
+
+        self.catch_message()
         self.adaptive_ui()
 
     def toggle_open_menu(self):
@@ -120,7 +182,7 @@ class MainWindow(CTk):
                 self.name_label = CTkLabel(self.menu_frame, text='name')
                 self.name_label.pack(pady=10)
 
-                self.entry_name = CTkEntry(self.menu_frame)
+                self.entry_name = CTkEntry(self.menu_frame, placeholder_text=self.name)
                 self.entry_name.pack()
 
                 self.save_name_button = CTkButton(self.menu_frame, text='Save name')
@@ -164,6 +226,7 @@ class MainWindow(CTk):
     def send_message(self):
         text = self.entry.get()
         if text:
+            self.sock.send(text.encode())
             self.add_message(self.avatar_path, text, is_sender=True)
             self.entry.delete(0, END)
 
@@ -174,14 +237,18 @@ class MainWindow(CTk):
             image_ctk = CTkImage(light_image=Image.open(self.avatar_path), size=(60, 60))
             self.avatar_label.configure(image=image_ctk, text='')
 
+    def catch_message(self):
+        try:
+            m = self.sock.recv(1024).decode()
+            if m:
+                print(m)
+                self.add_message(choice(['gamer.png', 'man.png']), m, is_sender=False)
+        except:
+            pass
 
-try:
-    sock = socket(AF_INET, SOCK_STREAM)
-    sock.connect(('localhost', 52345))
-    sock.setblocking(False)
-    sock.send('hello'.encode())
-except:
-    print('Немає запущеного сервера')
+        self.after(200, self.catch_message)
 
-window = MainWindow()
-window.mainloop()
+
+registration_window = RegisterWindow()
+registration_window.mainloop()
+
