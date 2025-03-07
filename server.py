@@ -1,56 +1,102 @@
 from socket import *
-from PIL import Image
-import io
+
+HOST = 'localhost'
+PORT = 52345
 
 server_socket = socket(AF_INET, SOCK_STREAM)
-server_socket.bind(('localhost', 52345))
+server_socket.bind((HOST, PORT))
 server_socket.listen(5)
-server_socket.setblocking(0)
+server_socket.setblocking(False)
 
-clients = []
+# Словник: ключ = сокет клієнта, значення = ім’я клієнта
+clients = {}
+
+
+def broadcast(message, exclude_conn=None):
+    """
+    Розсилка повідомлення 'message' усім клієнтам,
+    крім того, чиє з'єднання = 'exclude_conn' (за потреби).
+    """
+    for conn in list(clients.keys()):
+        if conn != exclude_conn:
+            try:
+                conn.send(message.encode())
+            except:
+                # Якщо помилка – закриваємо цього клієнта та видаляємо зі словника
+                name = clients[conn]
+                print(f'[SERVER] Помилка надсилання для {name}, закриваємо з’єднання.')
+                conn.close()
+                del clients[conn]
+
 
 while True:
+    # 1) Приймаємо нові підключення (якщо вони є)
     try:
         connection, address = server_socket.accept()
-        print(connection)
-        #connection.setblocking(0)
+        connection.setblocking(False)
+        print(f'[SERVER] Нове підключення: {address}')
+
+        # Перше, що отримуємо від клієнта – його ім’я
         name_client = connection.recv(1024).decode().strip()
+        if not name_client:
+            print(f'[SERVER] Не вдалося отримати ім’я від {address}, закриваємо з’єднання.')
+            connection.close()
+            continue
+
+        # Додаємо його у словник
+        clients[connection] = name_client
+        print(f"[SERVER] Користувач '{name_client}' підключився до чату.")
+
+        # Вітаємо особисто
+        connection.send(f'Вітаю, {name_client} у LogiTalk чаті!'.encode())
+
+        # Сповіщаємо решту користувачів
+        broadcast(f"Привітайте нового учасника чату: {name_client}", exclude_conn=connection)
+
+    except BlockingIOError:
+        pass  # Немає вхідних з'єднань у цей момент
+    except Exception as e:
+        print(f'[SERVER] Помилка при прийманні з’єднання: {e}')
+
+    # 2) Читаємо вхідні повідомлення від підключених клієнтів
+    for conn in list(clients.keys()):
         try:
-            data = b""
-            while True:
-                packet = connection.recv(4096)
+            data = conn.recv(1024)
+            if not data:
+                # Якщо порожні дані, припускаємо розрив з’єднання
+                raise ConnectionResetError
 
-                if not packet:
-                    break
-                data += packet
+            message = data.decode().strip()
+            if message:
+                # --- Перевіряємо, чи це команда на перейменування ---
+                if message.startswith('/rename '):
+                    # Нове ім’я після '/rename '
+                    new_name = message[8:].strip()  # зрізаємо '/rename '
+                    old_name = clients[conn]
 
-            # Збереження отриманого зображення
-            image = Image.open(io.BytesIO(data))
-            image.show()  # Відкриває зображення у Pillow
-            print(data)
-        except Exception as e:
-            print(e)
+                    if new_name:
+                        # Оновлюємо ім’я у словнику
+                        clients[conn] = new_name
+                        # Повідомимо всіх про зміну імені
+                        broadcast(f"{old_name} змінив(-ла) ім'я на {new_name}")
+                        print(f"[SERVER] {old_name} -> {new_name} (зміна імені)")
+                    else:
+                        # Якщо /rename без нового імені, можна відправити відмову чи проігнорувати
+                        conn.send("Нове ім'я порожнє. Спробуйте ще раз.".encode())
 
-        if name_client:
-            connection.send(f'Вітаю {name_client} в LogiTalk чаті!'.encode())
-            clients.append([connection, name_client])
-            for client in clients:
-                if client[0] != connection:
-                    client[0].send(f'Привітайте нового учасника чата {name_client}'.encode())
-    except:
-        pass
-
-    for client in clients[:]:
-        try:
-            message = client[0].recv(1024).decode().strip()
-            print(message)
-            for c in clients:
-                if client != c:
-                    c[0].send(f'{client[1]}: {message}'.encode())
+                else:
+                    # Якщо це не /rename — розсилаємо звичайне повідомлення
+                    sender_name = clients[conn]
+                    print(f"[SERVER] Від {sender_name}: {message}")
+                    broadcast(f"{sender_name}: {message}", exclude_conn=conn)
 
         except BlockingIOError:
+            # Немає нових даних – пропускаємо
             pass
         except:
-            print(f'Клієнт {client[1]} відключився.')
-            client[0].close()
-            clients.remove(client)
+            # Клієнт відключився або сталася помилка
+            disconnected_name = clients[conn]
+            print(f"[SERVER] Клієнт {disconnected_name} відключився.")
+            broadcast(f"{disconnected_name} покинув(-ла) чат.")
+            conn.close()
+            del clients[conn]
