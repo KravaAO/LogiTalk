@@ -1,56 +1,104 @@
-from socket import *
-from PIL import Image
-import io
+import socket
+import threading
+import pickle
+import struct
 
-server_socket = socket(AF_INET, SOCK_STREAM)
-server_socket.bind(('localhost', 52345))
-server_socket.listen(5)
-server_socket.setblocking(0)
+SERVER_HOST = 'localhost'
+SERVER_PORT = 5000
 
-clients = []
+# Зберігаємо дані про клієнтів: {client_socket: {"name": str, "avatar": bytes}}
+clients_data = {}
 
-while True:
-    try:
-        connection, address = server_socket.accept()
-        print(connection)
-        #connection.setblocking(0)
-        name_client = connection.recv(1024).decode().strip()
+
+def send_pickle(sock, data):
+    """
+    Серіалізуємо об'єкт (pickle) та відправляємо:
+    1) 4 байти (довжина),
+    2) самі дані.
+    """
+    packet = pickle.dumps(data)
+    packet_len = len(packet)
+    sock.sendall(struct.pack('>I', packet_len))
+    sock.sendall(packet)
+
+
+def recv_pickle(sock):
+    """
+    Зчитуємо 4 байти, отримуємо довжину.
+    Потім зчитуємо сам pickle.
+    Повертаємо Python-об'єкт або None, якщо отримати не вдалося.
+    """
+    raw_len = sock.recv(4)
+    if not raw_len:
+        return None
+    data_len = struct.unpack('>I', raw_len)[0]
+
+    data = b''
+    while len(data) < data_len:
+        chunk = sock.recv(data_len - len(data))
+        if not chunk:
+            return None
+        data += chunk
+
+    return pickle.loads(data)
+
+
+def broadcast_message(sender_socket, msg_dict):
+    """Надсилає msg_dict усім клієнтам, крім відправника."""
+    for client_socket in list(clients_data.keys()):
+        if client_socket != sender_socket:
+            try:
+                send_pickle(client_socket, msg_dict)
+            except:
+                client_socket.close()
+                del clients_data[client_socket]
+
+
+def handle_client(client_socket):
+    """Обробка підключень від одного клієнта."""
+    while True:
         try:
-            data = b""
-            while True:
-                packet = connection.recv(4096)
+            data = recv_pickle(client_socket)
+            if data is None:
+                # Клієнт відключився
+                break
 
-                if not packet:
-                    break
-                data += packet
+            if data["type"] == "registration":
+                # Новий клієнт надіслав своє ім’я та аватар
+                clients_data[client_socket] = {
+                    "name": data["name"],
+                    "avatar": data["avatar"]
+                }
+                print(f"Користувач '{data['name']}' підключився.")
 
-            # Збереження отриманого зображення
-            image = Image.open(io.BytesIO(data))
-            image.show()  # Відкриває зображення у Pillow
-            print(data)
+            elif data["type"] == "chat":
+                broadcast_message(client_socket, data)
+
         except Exception as e:
-            print(e)
+            print("Помилка при обробці повідомлення:", e)
+            break
 
-        if name_client:
-            connection.send(f'Вітаю {name_client} в LogiTalk чаті!'.encode())
-            clients.append([connection, name_client])
-            for client in clients:
-                if client[0] != connection:
-                    client[0].send(f'Привітайте нового учасника чата {name_client}'.encode())
-    except:
-        pass
+    if client_socket in clients_data:
+        name = clients_data[client_socket]["name"]
+        del clients_data[client_socket]
+        print(f"Користувач '{name}' відключився.")
+    else:
+        print("Користувач 'Невідомий' відключився.")
 
-    for client in clients[:]:
-        try:
-            message = client[0].recv(1024).decode().strip()
-            print(message)
-            for c in clients:
-                if client != c:
-                    c[0].send(f'{client[1]}: {message}'.encode())
+    client_socket.close()
 
-        except BlockingIOError:
-            pass
-        except:
-            print(f'Клієнт {client[1]} відключився.')
-            client[0].close()
-            clients.remove(client)
+
+def start_server():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((SERVER_HOST, SERVER_PORT))
+    server_socket.listen(5)
+    print(f"Сервер запущено на {SERVER_HOST}:{SERVER_PORT}")
+
+    while True:
+        client_socket, addr = server_socket.accept()
+        print(f"Новий клієнт підключився: {addr}")
+        thread = threading.Thread(target=handle_client, args=(client_socket,), daemon=True)
+        thread.start()
+
+
+start_server()
